@@ -1,0 +1,61 @@
+import { Router } from "express";
+import { pelangganRouter } from "./pelanggan.routes";
+import { supplierRouter } from "./supplier.routes";
+import { kendaraanRouter } from "./kendaraan.routes";
+import { mekanikRouter } from "./mekanik.routes";
+import { servisRouter } from "./servis.routes";
+import { barangRouter } from "./barang.routes";
+import { jasaRouter } from "./jasa.routes";
+import { paketRouter } from "./paket.routes";
+import { invoiceRouter } from "./invoice.routes";
+import { returRouter } from "./retur.routes";
+import { pembayaranRouter } from "./pembayaran.routes";
+import { pemasukanLainRouter } from "./pemasukanLain.routes";
+import { karyawanRouter } from "./karyawan.routes";
+import { posisiRouter } from "./posisi.routes";
+import { periodeGajiRouter } from "./periodeGaji.routes";
+import { pembelianRouter } from "./pembelian.routes";
+import { returPembelianRouter } from "./returPembelian.routes";
+import { pembayaranHutangRouter } from "./pembayaranHutang.routes";
+import { pengeluaranLainRouter } from "./pengeluaranLain.routes";
+import { stokOpnameRouter } from "./stokOpname.routes";
+import { penerimaanBarangRouter } from "./penerimaanBarang.routes";
+import { pengeluaranBarangRouter } from "./pengeluaranBarang.routes";
+import { pengaturanRouter } from "./pengaturan.routes";
+import { authRouter } from "./auth.routes";
+import { userRouter } from "./user.routes";
+import { requireAuth } from "../middlewares/auth";
+import { companyProfileController } from "../controllers/pengaturan.controller";
+
+export const apiRouter = Router();
+
+apiRouter.get("/health", (_req, res) => res.json({ status: "ok" }));
+apiRouter.use("/auth", authRouter);
+apiRouter.use("/users", userRouter);
+apiRouter.use("/pelanggan", pelangganRouter);
+apiRouter.use("/supplier", supplierRouter);
+apiRouter.use("/kendaraan", kendaraanRouter);
+apiRouter.use("/mekanik", mekanikRouter);
+apiRouter.use("/servis", servisRouter);
+apiRouter.use("/barang", barangRouter);
+apiRouter.use("/jasa", jasaRouter);
+apiRouter.use("/paket", paketRouter);
+apiRouter.use("/invoice", invoiceRouter);
+apiRouter.use("/retur", returRouter);
+apiRouter.use("/pembayaran", pembayaranRouter);
+apiRouter.use("/pemasukan-lain", pemasukanLainRouter);
+apiRouter.use("/karyawan", karyawanRouter);
+apiRouter.use("/posisi", posisiRouter);
+apiRouter.use("/periode-gaji", periodeGajiRouter);
+apiRouter.use("/pembelian", pembelianRouter);
+apiRouter.use("/retur-pembelian", returPembelianRouter);
+apiRouter.use("/pembayaran-hutang", pembayaranHutangRouter);
+apiRouter.use("/pengeluaran-lain", pengeluaranLainRouter);
+apiRouter.use("/stok-opname", stokOpnameRouter);
+apiRouter.use("/penerimaan-barang", penerimaanBarangRouter);
+apiRouter.use("/pengeluaran-barang", pengeluaranBarangRouter);
+// Readable by any authenticated role (needed to print invoices/receipts); must be registered before
+// pengaturanRouter below, since that router's admin-only gate applies to every "/pengaturan/*" request
+// regardless of whether a matching route exists inside it. Editing stays admin-only via pengaturanRouter.
+apiRouter.get("/pengaturan/profil-perusahaan", requireAuth, companyProfileController.get);
+apiRouter.use("/pengaturan", pengaturanRouter);

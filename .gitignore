@@ -1,0 +1,12 @@
+node_modules
+dist
+.env
+*.log
+
+# runtime database (regenerated via scripts/seed.mjs, contains live/test data)
+data/
+
+# reference/import files with real customer, business, and bank data
+invoice.pdf
+*.xlsx
+imports/

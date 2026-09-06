@@ -1,0 +1,164 @@
+import { Request, Response } from "express";
+import { SqliteStore } from "../utils/sqliteStore";
+import { Jasa } from "../models/types";
+import { ApiError } from "../middlewares/errorHandler";
+import { paginate, parsePagination } from "../utils/pagination";
+import { buildExportWorkbook, buildTemplateWorkbook, ImportSummary, parseSheetRows, sendXlsx } from "../utils/excel";
+import { ensureLookup } from "../utils/ensureLookup";
+
+export const jasaStore = new SqliteStore<Jasa>("jasa");
+const store = jasaStore;
+
+const TEMPLATE_HEADERS = [
+  "Kode",
+  "Nama",
+  "Kategori",
+  "Jenis",
+  "Model",
+  "Harga Jual",
+  "Komisi (%)",
+  "Deskripsi",
+  "Tampil di Booking (Ya/Tidak)",
+  "Aktif (Ya/Tidak)",
+];
+const TEMPLATE_INSTRUCTIONS = [
+  "[WAJIB]",
+  "[WAJIB]",
+  "[WAJIB]",
+  "[WAJIB]",
+  "[Opsional]",
+  "[Opsional] angka, default 0",
+  "[Opsional] angka, default 10",
+  "[Opsional]",
+  "[Opsional] default Tidak",
+  "[Opsional] default Ya",
+];
+
+export const jasaController = {
+  list(req: Request, res: Response) {
+    const { search, kategori } = req.query;
+    let items = store.findAll();
+
+    if (typeof search === "string" && search.trim()) {
+      const q = search.trim().toLowerCase();
+      items = items.filter((j) => j.kode.toLowerCase().includes(q) || j.nama.toLowerCase().includes(q));
+    }
+    if (typeof kategori === "string" && kategori) {
+      items = items.filter((j) => j.kategori === kategori);
+    }
+
+    const { page, limit } = parsePagination(req);
+    res.json(paginate(items, page, limit));
+  },
+
+  get(req: Request, res: Response) {
+    const item = store.findById(String(req.params.id));
+    if (!item) throw new ApiError(404, "Jasa tidak ditemukan");
+    res.json(item);
+  },
+
+  create(req: Request, res: Response) {
+    const { kode, nama, kategori, jenis, model, deskripsi, harga, komisi, tampilBooking, aktif } = req.body;
+    if (!kode || !nama || !kategori || !jenis) {
+      throw new ApiError(400, "kode, nama, kategori, dan jenis wajib diisi");
+    }
+    const item = store.create({
+      kode,
+      nama,
+      kategori,
+      jenis,
+      model,
+      deskripsi,
+      harga: Number(harga) || 0,
+      komisi: komisi === undefined || komisi === "" ? 10 : Number(komisi),
+      tampilBooking: Boolean(tampilBooking),
+      aktif: aktif === undefined ? true : Boolean(aktif),
+      createdAt: new Date().toISOString(),
+    });
+    res.status(201).json(item);
+  },
+
+  update(req: Request, res: Response) {
+    const item = store.update(String(req.params.id), req.body);
+    if (!item) throw new ApiError(404, "Jasa tidak ditemukan");
+    res.json(item);
+  },
+
+  remove(req: Request, res: Response) {
+    const deleted = store.delete(String(req.params.id));
+    if (!deleted) throw new ApiError(404, "Jasa tidak ditemukan");
+    res.status(204).send();
+  },
+
+  template(_req: Request, res: Response) {
+    const buffer = buildTemplateWorkbook("Services", TEMPLATE_HEADERS, TEMPLATE_INSTRUCTIONS);
+    sendXlsx(res, buffer, "template-jasa.xlsx");
+  },
+
+  exportXlsx(_req: Request, res: Response) {
+    const rows = store.findAll().map((j) => [
+      j.kode,
+      j.nama,
+      j.kategori,
+      j.jenis,
+      j.model ?? "",
+      j.harga,
+      j.komisi,
+      j.deskripsi ?? "",
+      j.tampilBooking ? "Ya" : "Tidak",
+      j.aktif ? "Ya" : "Tidak",
+    ]);
+    const buffer = buildExportWorkbook("Services", TEMPLATE_HEADERS, rows);
+    sendXlsx(res, buffer, "data-jasa.xlsx");
+  },
+
+  importXlsx(req: Request, res: Response) {
+    if (!req.file) throw new ApiError(400, "File tidak ditemukan");
+
+    const rows = parseSheetRows(req.file.buffer, "Services");
+    const existingKode = new Set(store.findAll().map((j) => j.kode.toLowerCase()));
+    const summary: ImportSummary = { created: 0, failed: 0, errors: [] };
+
+    rows.forEach((row, index) => {
+      const rowNumber = index + 3;
+      try {
+        const kode = row["Kode"];
+        const nama = row["Nama"];
+        const kategori = row["Kategori"];
+        const jenis = row["Jenis"];
+
+        if (!kode || !nama || !kategori || !jenis) {
+          throw new Error("Kode, Nama, Kategori, dan Jenis wajib diisi");
+        }
+        if (existingKode.has(kode.toLowerCase())) {
+          throw new Error(`Kode "${kode}" sudah dipakai`);
+        }
+
+        const kategoriNama = ensureLookup("kategori", kategori);
+        const jenisNama = ensureLookup("jenis", jenis);
+        const modelNama = row["Model"] ? ensureLookup("model", row["Model"]) : undefined;
+
+        store.create({
+          kode,
+          nama,
+          kategori: kategoriNama,
+          jenis: jenisNama,
+          model: modelNama,
+          deskripsi: row["Deskripsi"] || undefined,
+          harga: Number(row["Harga Jual"]) || 0,
+          komisi: row["Komisi (%)"] ? Number(row["Komisi (%)"]) : 10,
+          tampilBooking: row["Tampil di Booking (Ya/Tidak)"].toLowerCase() === "ya",
+          aktif: row["Aktif (Ya/Tidak)"].toLowerCase() !== "tidak",
+          createdAt: new Date().toISOString(),
+        });
+        existingKode.add(kode.toLowerCase());
+        summary.created += 1;
+      } catch (err) {
+        summary.failed += 1;
+        summary.errors.push({ row: rowNumber, message: err instanceof Error ? err.message : "Baris tidak valid" });
+      }
+    });
+
+    res.json(summary);
+  },
+};
