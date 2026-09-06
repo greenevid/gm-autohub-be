@@ -10,12 +10,13 @@ const store = penerimaanBarangStore;
 
 const VALID_STATUS: StatusPenerimaanBarang[] = ["draft", "terposting"];
 
-function resolveItems(rawItems: unknown): PenerimaanBarangItem[] {
+async function resolveItems(rawItems: unknown): Promise<PenerimaanBarangItem[]> {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ApiError(400, "Detail item tidak boleh kosong");
   }
 
-  return rawItems.map((raw) => {
+  const result: PenerimaanBarangItem[] = [];
+  for (const raw of rawItems) {
     const input = raw as {
       itemId?: string;
       satuan?: string;
@@ -27,13 +28,13 @@ function resolveItems(rawItems: unknown): PenerimaanBarangItem[] {
     if (!input.itemId) throw new ApiError(400, "Setiap item harus memiliki itemId");
     if (!input.lokasi) throw new ApiError(400, "Setiap item harus memiliki lokasi");
 
-    const barang = barangStore.findById(input.itemId);
+    const barang = await barangStore.findById(input.itemId);
     if (!barang) throw new ApiError(400, `Barang dengan id ${input.itemId} tidak ditemukan`);
 
     const jumlah = Number(input.jumlah) || 0;
     if (jumlah <= 0) throw new ApiError(400, `Jumlah untuk ${barang.nama} harus lebih dari 0`);
 
-    return {
+    result.push({
       itemId: barang.id,
       nama: barang.nama,
       kode: barang.kode,
@@ -42,49 +43,49 @@ function resolveItems(rawItems: unknown): PenerimaanBarangItem[] {
       jumlah,
       hargaSatuan: Number(input.hargaSatuan) > 0 ? Number(input.hargaSatuan) : undefined,
       catatan: input.catatan || undefined,
-    };
-  });
+    });
+  }
+  return result;
 }
 
-function applyStockIn(items: PenerimaanBarangItem[]) {
+async function applyStockIn(items: PenerimaanBarangItem[]) {
   for (const item of items) {
-    const barang = barangStore.findById(item.itemId);
-    if (!barang) continue;
+    await barangStore.updateWithLock(item.itemId, (current) => {
+      const hasEntry = current.stokLokasi.some((sl) => sl.lokasi === item.lokasi && sl.satuan === item.satuan);
+      const stokLokasi = hasEntry
+        ? current.stokLokasi.map((sl) =>
+            sl.lokasi === item.lokasi && sl.satuan === item.satuan ? { ...sl, jumlah: sl.jumlah + item.jumlah } : sl
+          )
+        : [...current.stokLokasi, { satuan: item.satuan as Satuan, lokasi: item.lokasi, jumlah: item.jumlah }];
 
-    const hasEntry = barang.stokLokasi.some((sl) => sl.lokasi === item.lokasi && sl.satuan === item.satuan);
-    const stokLokasi = hasEntry
-      ? barang.stokLokasi.map((sl) =>
-          sl.lokasi === item.lokasi && sl.satuan === item.satuan ? { ...sl, jumlah: sl.jumlah + item.jumlah } : sl
-        )
-      : [...barang.stokLokasi, { satuan: item.satuan as Satuan, lokasi: item.lokasi, jumlah: item.jumlah }];
-
-    barangStore.update(barang.id, { stok: barang.stok + item.jumlah, stokLokasi });
+      return { stok: current.stok + item.jumlah, stokLokasi };
+    });
   }
 }
 
 export const penerimaanBarangController = {
-  list(_req: Request, res: Response) {
-    res.json(store.findAll());
+  async list(_req: Request, res: Response) {
+    res.json(await store.findAll());
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Penerimaan barang tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { tanggal, alasan, catatan, items, status } = req.body;
     if (!alasan) throw new ApiError(400, "Alasan wajib diisi");
 
-    const resolvedItems = resolveItems(items);
+    const resolvedItems = await resolveItems(items);
     const finalStatus: StatusPenerimaanBarang = status && VALID_STATUS.includes(status) ? status : "terposting";
-    if (finalStatus === "terposting") applyStockIn(resolvedItems);
+    if (finalStatus === "terposting") await applyStockIn(resolvedItems);
 
-    const item = store.create({
+    const item = await store.create({
       kode: generateKode(
         "GR",
-        store.findAll().map((i) => i.kode)
+        (await store.findAll()).map((i) => i.kode)
       ),
       tanggal: tanggal || new Date().toISOString(),
       alasan,
@@ -98,8 +99,8 @@ export const penerimaanBarangController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
-    const existing = store.findById(String(req.params.id));
+  async update(req: Request, res: Response) {
+    const existing = await store.findById(String(req.params.id));
     if (!existing) throw new ApiError(404, "Penerimaan barang tidak ditemukan");
 
     const { status } = req.body;
@@ -109,17 +110,17 @@ export const penerimaanBarangController = {
 
     const patch: Partial<PenerimaanBarang> = {};
     if (status === "terposting" && existing.status === "draft") {
-      applyStockIn(existing.items);
+      await applyStockIn(existing.items);
       patch.status = "terposting";
       patch.postedAt = new Date().toISOString();
     }
 
-    const item = store.update(existing.id, patch);
+    const item = await store.update(existing.id, patch);
     res.json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Penerimaan barang tidak ditemukan");
     res.status(204).send();
   },

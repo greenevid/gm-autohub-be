@@ -35,9 +35,9 @@ const TEMPLATE_INSTRUCTIONS = [
 ];
 
 export const jasaController = {
-  list(req: Request, res: Response) {
+  async list(req: Request, res: Response) {
     const { search, kategori } = req.query;
-    let items = store.findAll();
+    let items = await store.findAll();
 
     if (typeof search === "string" && search.trim()) {
       const q = search.trim().toLowerCase();
@@ -51,18 +51,18 @@ export const jasaController = {
     res.json(paginate(items, page, limit));
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Jasa tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { kode, nama, kategori, jenis, model, deskripsi, harga, komisi, tampilBooking, aktif } = req.body;
     if (!kode || !nama || !kategori || !jenis) {
       throw new ApiError(400, "kode, nama, kategori, dan jenis wajib diisi");
     }
-    const item = store.create({
+    const item = await store.create({
       kode,
       nama,
       kategori,
@@ -78,14 +78,14 @@ export const jasaController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
-    const item = store.update(String(req.params.id), req.body);
+  async update(req: Request, res: Response) {
+    const item = await store.update(String(req.params.id), req.body);
     if (!item) throw new ApiError(404, "Jasa tidak ditemukan");
     res.json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Jasa tidak ditemukan");
     res.status(204).send();
   },
@@ -95,8 +95,9 @@ export const jasaController = {
     sendXlsx(res, buffer, "template-jasa.xlsx");
   },
 
-  exportXlsx(_req: Request, res: Response) {
-    const rows = store.findAll().map((j) => [
+  async exportXlsx(_req: Request, res: Response) {
+    const all = await store.findAll();
+    const rows = all.map((j) => [
       j.kode,
       j.nama,
       j.kategori,
@@ -112,14 +113,14 @@ export const jasaController = {
     sendXlsx(res, buffer, "data-jasa.xlsx");
   },
 
-  importXlsx(req: Request, res: Response) {
+  async importXlsx(req: Request, res: Response) {
     if (!req.file) throw new ApiError(400, "File tidak ditemukan");
 
     const rows = parseSheetRows(req.file.buffer, "Services");
-    const existingKode = new Set(store.findAll().map((j) => j.kode.toLowerCase()));
+    const existingKode = new Set((await store.findAll()).map((j) => j.kode.toLowerCase()));
     const summary: ImportSummary = { created: 0, failed: 0, errors: [] };
 
-    rows.forEach((row, index) => {
+    for (const [index, row] of rows.entries()) {
       const rowNumber = index + 3;
       try {
         const kode = row["Kode"];
@@ -134,11 +135,11 @@ export const jasaController = {
           throw new Error(`Kode "${kode}" sudah dipakai`);
         }
 
-        const kategoriNama = ensureLookup("kategori", kategori);
-        const jenisNama = ensureLookup("jenis", jenis);
-        const modelNama = row["Model"] ? ensureLookup("model", row["Model"]) : undefined;
+        const kategoriNama = await ensureLookup("kategori", kategori);
+        const jenisNama = await ensureLookup("jenis", jenis);
+        const modelNama = row["Model"] ? await ensureLookup("model", row["Model"]) : undefined;
 
-        store.create({
+        await store.create({
           kode,
           nama,
           kategori: kategoriNama,
@@ -157,7 +158,7 @@ export const jasaController = {
         summary.failed += 1;
         summary.errors.push({ row: rowNumber, message: err instanceof Error ? err.message : "Baris tidak valid" });
       }
-    });
+    }
 
     res.json(summary);
   },

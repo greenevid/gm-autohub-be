@@ -9,39 +9,44 @@ import { supplierStore } from "./supplier.controller";
 
 const store = new SqliteStore<ReturPembelian>("retur_pembelian");
 
-function applyReturToPembelian(pembelianId: string, returAmount: number) {
-  const pembelian = pembelianStore.findById(pembelianId);
-  if (!pembelian) return;
+async function applyReturToPembelian(pembelianId: string, returAmount: number) {
+  let creditDelta = 0;
+  let supplierId: string | undefined;
 
-  const previousNet = pembelianNetTotal(pembelian);
-  const previousExcess = Math.max(0, pembelian.dibayar - previousNet);
+  const updated = await pembelianStore.updateWithLock(pembelianId, (current) => {
+    const previousNet = pembelianNetTotal(current);
+    const previousExcess = Math.max(0, current.dibayar - previousNet);
 
-  const newReturTotal = (pembelian.returTotal ?? 0) + returAmount;
-  const newNet = pembelianNetTotal({ ...pembelian, returTotal: newReturTotal });
-  const newExcess = Math.max(0, pembelian.dibayar - newNet);
+    const newReturTotal = (current.returTotal ?? 0) + returAmount;
+    const newNet = pembelianNetTotal({ ...current, returTotal: newReturTotal });
+    const newExcess = Math.max(0, current.dibayar - newNet);
 
-  pembelianStore.update(pembelian.id, {
-    returTotal: newReturTotal,
-    statusPembayaran: computeStatusPembayaran(newNet, pembelian.dibayar),
+    creditDelta = newExcess - previousExcess;
+    supplierId = current.supplierId;
+
+    return {
+      returTotal: newReturTotal,
+      statusPembayaran: computeStatusPembayaran(newNet, current.dibayar),
+    };
   });
+  if (!updated || !supplierId) return;
 
-  const creditDelta = newExcess - previousExcess;
   if (creditDelta > 0) {
-    const supplier = supplierStore.findById(pembelian.supplierId);
-    if (supplier) {
-      supplierStore.update(supplier.id, { saldoKredit: (supplier.saldoKredit ?? 0) + creditDelta });
-    }
+    await supplierStore.updateWithLock(supplierId, (current) => ({
+      saldoKredit: (current.saldoKredit ?? 0) + creditDelta,
+    }));
   }
 }
 
-function resolveItems(pembelianId: string, rawItems: unknown): ReturPembelianItem[] {
-  const pembelian = pembelianStore.findById(pembelianId);
+async function resolveItems(pembelianId: string, rawItems: unknown): Promise<ReturPembelianItem[]> {
+  const pembelian = await pembelianStore.findById(pembelianId);
   if (!pembelian) throw new ApiError(400, `Pembelian dengan id ${pembelianId} tidak ditemukan`);
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ApiError(400, "items retur tidak boleh kosong");
   }
 
-  return rawItems.map((raw) => {
+  const result: ReturPembelianItem[] = [];
+  for (const raw of rawItems) {
     const input = raw as { itemId?: string; qty?: number };
     const pembelianItem = pembelian.items.find((i) => i.itemId === input.itemId);
     if (!pembelianItem) {
@@ -49,37 +54,37 @@ function resolveItems(pembelianId: string, rawItems: unknown): ReturPembelianIte
     }
     const qty = Number(input.qty) || 1;
 
-    const barang = barangStore.findById(pembelianItem.itemId);
-    if (barang) barangStore.update(barang.id, { stok: barang.stok - qty });
+    await barangStore.updateWithLock(pembelianItem.itemId, (current) => ({ stok: current.stok - qty }));
 
-    return { itemId: pembelianItem.itemId, nama: pembelianItem.nama, qty, hargaSatuan: pembelianItem.hargaSatuan };
-  });
+    result.push({ itemId: pembelianItem.itemId, nama: pembelianItem.nama, qty, hargaSatuan: pembelianItem.hargaSatuan });
+  }
+  return result;
 }
 
 export const returPembelianController = {
-  list(_req: Request, res: Response) {
-    res.json(store.findAll());
+  async list(_req: Request, res: Response) {
+    res.json(await store.findAll());
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Retur pembelian tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { pembelianId, tanggal, alasan, items } = req.body;
     if (!pembelianId) throw new ApiError(400, "pembelianId wajib diisi");
 
-    const resolvedItems = resolveItems(pembelianId, items);
+    const resolvedItems = await resolveItems(pembelianId, items);
     const total = resolvedItems.reduce((sum, item) => sum + item.qty * item.hargaSatuan, 0);
 
-    applyReturToPembelian(pembelianId, total);
+    await applyReturToPembelian(pembelianId, total);
 
-    const item = store.create({
+    const item = await store.create({
       kode: generateKode(
         "RTP",
-        store.findAll().map((i) => i.kode)
+        (await store.findAll()).map((i) => i.kode)
       ),
       pembelianId,
       tanggal: tanggal || new Date().toISOString(),
@@ -91,8 +96,8 @@ export const returPembelianController = {
     res.status(201).json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Retur pembelian tidak ditemukan");
     res.status(204).send();
   },

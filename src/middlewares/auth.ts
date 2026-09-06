@@ -18,10 +18,10 @@ function extractToken(req: Request): string | undefined {
   return auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
 }
 
-export function requireAuth(req: Request, _res: Response, next: NextFunction) {
+export async function requireAuth(req: Request, _res: Response, next: NextFunction) {
   const session = resolveSession(extractToken(req));
   if (!session) throw new ApiError(401, "Belum login");
-  const user = userStore.findById(session.userId);
+  const user = await userStore.findById(session.userId);
   if (!user || !user.aktif) throw new ApiError(401, "Belum login");
   const { passwordHash: _passwordHash, ...publicUser } = user;
   req.authUser = publicUser;

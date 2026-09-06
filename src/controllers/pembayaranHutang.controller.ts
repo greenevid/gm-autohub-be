@@ -7,36 +7,40 @@ import { computeStatusPembayaran, pembelianNetTotal, pembelianStore } from "./pe
 const store = new SqliteStore<PembayaranHutang>("pembayaran_hutang");
 
 export const pembayaranHutangController = {
-  list(_req: Request, res: Response) {
-    res.json(store.findAll());
+  async list(_req: Request, res: Response) {
+    res.json(await store.findAll());
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { pembelianId, tanggal, jumlah, metode } = req.body;
     if (!pembelianId || !jumlah) throw new ApiError(400, "pembelianId dan jumlah wajib diisi");
+    const jumlahNum = Number(jumlah);
 
-    const pembelian = pembelianStore.findById(pembelianId);
-    if (!pembelian) throw new ApiError(400, `Pembelian dengan id ${pembelianId} tidak ditemukan`);
+    const pembelianExists = await pembelianStore.findById(pembelianId);
+    if (!pembelianExists) throw new ApiError(400, `Pembelian dengan id ${pembelianId} tidak ditemukan`);
 
-    const item = store.create({
+    const item = await store.create({
       pembelianId,
       tanggal: tanggal || new Date().toISOString(),
-      jumlah: Number(jumlah),
+      jumlah: jumlahNum,
       metode,
       createdAt: new Date().toISOString(),
     });
 
-    const dibayarBaru = pembelian.dibayar + Number(jumlah);
-    pembelianStore.update(pembelian.id, {
-      dibayar: dibayarBaru,
-      statusPembayaran: computeStatusPembayaran(pembelianNetTotal(pembelian), dibayarBaru),
+    // Row-locked so two concurrent payments on the same pembelian can't clobber each other's dibayar update.
+    await pembelianStore.updateWithLock(pembelianId, (current) => {
+      const dibayarBaru = current.dibayar + jumlahNum;
+      return {
+        dibayar: dibayarBaru,
+        statusPembayaran: computeStatusPembayaran(pembelianNetTotal(current), dibayarBaru),
+      };
     });
 
     res.status(201).json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Pembayaran hutang tidak ditemukan");
     res.status(204).send();
   },

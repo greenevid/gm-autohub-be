@@ -11,8 +11,8 @@ const store = new SqliteStore<Retur>("retur");
 
 const VALID_STATUS: StatusRetur[] = ["draft", "ongoing", "selesai"];
 
-function resolveItems(invoiceId: string, rawItems: unknown): ReturItem[] {
-  const invoice = invoiceStore.findById(invoiceId);
+async function resolveItems(invoiceId: string, rawItems: unknown): Promise<ReturItem[]> {
+  const invoice = await invoiceStore.findById(invoiceId);
   if (!invoice) throw new ApiError(400, `Invoice dengan id ${invoiceId} tidak ditemukan`);
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ApiError(400, "items retur tidak boleh kosong");
@@ -30,10 +30,9 @@ function resolveItems(invoiceId: string, rawItems: unknown): ReturItem[] {
   });
 }
 
-function restockItems(items: ReturItem[]) {
+async function restockItems(items: ReturItem[]) {
   for (const item of items) {
-    const barang = barangStore.findById(item.itemId);
-    if (barang) barangStore.update(barang.id, { stok: barang.stok + item.qty });
+    await barangStore.updateWithLock(item.itemId, (current) => ({ stok: current.stok + item.qty }));
   }
 }
 
@@ -49,59 +48,63 @@ function resolveStatus(status: unknown, fallback: StatusRetur): StatusRetur {
   return typeof status === "string" && VALID_STATUS.includes(status as StatusRetur) ? (status as StatusRetur) : fallback;
 }
 
-function applyReturToInvoice(invoiceId: string, returAmount: number) {
-  const invoice = invoiceStore.findById(invoiceId);
-  if (!invoice) return;
+async function applyReturToInvoice(invoiceId: string, returAmount: number) {
+  let creditDelta = 0;
+  let pelangganId: string | undefined;
 
-  const previousNet = invoiceNetTotal(invoice);
-  const previousExcess = Math.max(0, invoice.dibayar - previousNet);
+  const updated = await invoiceStore.updateWithLock(invoiceId, (current) => {
+    const previousNet = invoiceNetTotal(current);
+    const previousExcess = Math.max(0, current.dibayar - previousNet);
 
-  const newReturTotal = (invoice.returTotal ?? 0) + returAmount;
-  const newNet = invoiceNetTotal({ ...invoice, returTotal: newReturTotal });
-  const newExcess = Math.max(0, invoice.dibayar - newNet);
+    const newReturTotal = (current.returTotal ?? 0) + returAmount;
+    const newNet = invoiceNetTotal({ ...current, returTotal: newReturTotal });
+    const newExcess = Math.max(0, current.dibayar - newNet);
 
-  invoiceStore.update(invoice.id, {
-    returTotal: newReturTotal,
-    statusPembayaran: computeStatusPembayaran(newNet, invoice.dibayar),
+    creditDelta = newExcess - previousExcess;
+    pelangganId = current.pelangganId;
+
+    return {
+      returTotal: newReturTotal,
+      statusPembayaran: computeStatusPembayaran(newNet, current.dibayar),
+    };
   });
+  if (!updated || !pelangganId) return;
 
-  const creditDelta = newExcess - previousExcess;
   if (creditDelta > 0) {
-    const pelanggan = pelangganStore.findById(invoice.pelangganId);
-    if (pelanggan) {
-      pelangganStore.update(pelanggan.id, { saldoKredit: (pelanggan.saldoKredit ?? 0) + creditDelta });
-    }
+    await pelangganStore.updateWithLock(pelangganId, (current) => ({
+      saldoKredit: (current.saldoKredit ?? 0) + creditDelta,
+    }));
   }
 }
 
 export const returController = {
-  list(_req: Request, res: Response) {
-    res.json(store.findAll());
+  async list(_req: Request, res: Response) {
+    res.json(await store.findAll());
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Retur tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { invoiceId, tanggal, alasan, items, potonganPersen, potonganRp, pajakPersen, status } = req.body;
     if (!invoiceId) throw new ApiError(400, "invoiceId wajib diisi");
 
-    const resolvedItems = resolveItems(invoiceId, items);
+    const resolvedItems = await resolveItems(invoiceId, items);
     const resolvedStatus = resolveStatus(status, "selesai");
     const { subtotal, pajak, total } = computeTotals(resolvedItems, potonganPersen, potonganRp, pajakPersen);
 
     if (resolvedStatus === "selesai") {
-      restockItems(resolvedItems);
-      applyReturToInvoice(invoiceId, total);
+      await restockItems(resolvedItems);
+      await applyReturToInvoice(invoiceId, total);
     }
 
-    const item = store.create({
+    const item = await store.create({
       kode: generateKode(
         "RTN",
-        store.findAll().map((i) => i.kode)
+        (await store.findAll()).map((i) => i.kode)
       ),
       invoiceId,
       tanggal: tanggal || new Date().toISOString(),
@@ -119,12 +122,12 @@ export const returController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
-    const existing = store.findById(String(req.params.id));
+  async update(req: Request, res: Response) {
+    const existing = await store.findById(String(req.params.id));
     if (!existing) throw new ApiError(404, "Retur tidak ditemukan");
 
     const { alasan, items, potonganPersen, potonganRp, pajakPersen, status } = req.body;
-    const resolvedItems = items ? resolveItems(existing.invoiceId, items) : existing.items;
+    const resolvedItems = items ? await resolveItems(existing.invoiceId, items) : existing.items;
     const resolvedStatus = resolveStatus(status, existing.status);
     const { subtotal, pajak, total } = computeTotals(
       resolvedItems,
@@ -134,11 +137,11 @@ export const returController = {
     );
 
     if (resolvedStatus === "selesai" && existing.status !== "selesai") {
-      restockItems(resolvedItems);
-      applyReturToInvoice(existing.invoiceId, total);
+      await restockItems(resolvedItems);
+      await applyReturToInvoice(existing.invoiceId, total);
     }
 
-    const updated = store.update(existing.id, {
+    const updated = await store.update(existing.id, {
       alasan: alasan ?? existing.alasan,
       items: resolvedItems,
       subtotal,
@@ -152,8 +155,8 @@ export const returController = {
     res.json(updated);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Retur tidak ditemukan");
     res.status(204).send();
   },

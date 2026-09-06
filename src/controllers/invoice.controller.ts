@@ -12,12 +12,13 @@ const store = invoiceStore;
 
 const VALID_STATUS: StatusInvoice[] = ["selesai", "draft", "dibatalkan"];
 
-function resolveItems(rawItems: unknown): InvoiceItem[] {
+async function resolveItems(rawItems: unknown): Promise<InvoiceItem[]> {
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new ApiError(400, "items tidak boleh kosong");
   }
 
-  return rawItems.map((raw) => {
+  const result: InvoiceItem[] = [];
+  for (const raw of rawItems) {
     const input = raw as {
       tipe?: string;
       itemId?: string;
@@ -37,10 +38,10 @@ function resolveItems(rawItems: unknown): InvoiceItem[] {
     const lokasi = input.lokasi || undefined;
 
     if (input.tipe === "barang") {
-      const barang = barangStore.findById(input.itemId);
+      const barang = await barangStore.findById(input.itemId);
       if (!barang) throw new ApiError(400, `Barang dengan id ${input.itemId} tidak ditemukan`);
-      barangStore.update(barang.id, { stok: barang.stok - qty });
-      return {
+      await barangStore.updateWithLock(barang.id, (current) => ({ stok: current.stok - qty }));
+      result.push({
         tipe: "barang",
         itemId: barang.id,
         nama: barang.nama,
@@ -50,12 +51,13 @@ function resolveItems(rawItems: unknown): InvoiceItem[] {
         hargaSatuan: hargaOverride ?? barang.hargaJual,
         diskonPersen,
         lokasi,
-      };
+      });
+      continue;
     }
 
-    const jasa = jasaStore.findById(input.itemId);
+    const jasa = await jasaStore.findById(input.itemId);
     if (!jasa) throw new ApiError(400, `Jasa dengan id ${input.itemId} tidak ditemukan`);
-    return {
+    result.push({
       tipe: "jasa",
       itemId: jasa.id,
       nama: jasa.nama,
@@ -63,8 +65,9 @@ function resolveItems(rawItems: unknown): InvoiceItem[] {
       qty,
       hargaSatuan: hargaOverride ?? jasa.harga,
       diskonPersen,
-    };
-  });
+    });
+  }
+  return result;
 }
 
 function roundToNearest(value: number, step: number) {
@@ -93,17 +96,17 @@ export function invoiceNetTotal(invoice: Invoice): number {
 }
 
 export const invoiceController = {
-  list(_req: Request, res: Response) {
-    res.json(store.findAll());
+  async list(_req: Request, res: Response) {
+    res.json(await store.findAll());
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Invoice tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const {
       pelangganId,
       kendaraanIds,
@@ -121,9 +124,13 @@ export const invoiceController = {
     } = req.body;
     if (!pelangganId) throw new ApiError(400, "pelangganId wajib diisi");
 
-    const resolvedItems = resolveItems(items);
+    const resolvedItems = await resolveItems(items);
     const potongan = Number(potonganPersen) || 0;
-    const { subtotal, dpp, pajakPersen, pajak, total } = computeTotals(resolvedItems, potongan, pajakSettings.get());
+    const { subtotal, dpp, pajakPersen, pajak, total } = computeTotals(
+      resolvedItems,
+      potongan,
+      await pajakSettings.get()
+    );
     const paid = Number(dibayar) || 0;
 
     const tanggalInvoice = tanggal || new Date().toISOString();
@@ -135,10 +142,10 @@ export const invoiceController = {
       jatuhTempo = new Date(new Date(tanggalInvoice).getTime() + hariTempo * 24 * 60 * 60 * 1000).toISOString();
     }
 
-    const item = store.create({
+    const item = await store.create({
       kode: generateKode(
         "SL",
-        store.findAll().map((i) => i.kode)
+        (await store.findAll()).map((i) => i.kode)
       ),
       pelangganId,
       kendaraanIds: Array.isArray(kendaraanIds) ? kendaraanIds.filter((id) => typeof id === "string") : undefined,
@@ -163,8 +170,8 @@ export const invoiceController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
-    const existing = store.findById(String(req.params.id));
+  async update(req: Request, res: Response) {
+    const existing = await store.findById(String(req.params.id));
     if (!existing) throw new ApiError(404, "Invoice tidak ditemukan");
 
     const { status, dibayar, ...rest } = req.body;
@@ -182,12 +189,12 @@ export const invoiceController = {
       patch.statusPembayaran = computeStatusPembayaran(invoiceNetTotal(existing), patch.dibayar);
     }
 
-    const item = store.update(existing.id, patch);
+    const item = await store.update(existing.id, patch);
     res.json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Invoice tidak ditemukan");
     res.status(204).send();
   },

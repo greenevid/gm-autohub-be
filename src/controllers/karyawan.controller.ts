@@ -15,9 +15,9 @@ function generateKode(): string {
 }
 
 export const karyawanController = {
-  list(req: Request, res: Response) {
+  async list(req: Request, res: Response) {
     const { search, posisiId, status } = req.query;
-    let items = store.findAll();
+    let items = await store.findAll();
 
     if (typeof search === "string" && search.trim()) {
       const q = search.trim().toLowerCase();
@@ -39,8 +39,8 @@ export const karyawanController = {
     res.json(items);
   },
 
-  stats(_req: Request, res: Response) {
-    const items = store.findAll();
+  async stats(_req: Request, res: Response) {
+    const items = await store.findAll();
     res.json({
       total: items.length,
       aktif: items.filter((k) => k.status === "aktif").length,
@@ -48,20 +48,20 @@ export const karyawanController = {
     });
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Karyawan tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { nama, email, telepon, nik, alamat, posisiId, tanggalMasuk, satuanGaji, gaji, status } = req.body;
 
     if (!nama || !tanggalMasuk) {
       throw new ApiError(400, "nama dan tanggalMasuk wajib diisi");
     }
 
-    const item = store.create({
+    const item = await store.create({
       kode: generateKode(),
       nama,
       email: email || undefined,
@@ -78,14 +78,14 @@ export const karyawanController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
-    const item = store.update(String(req.params.id), req.body);
+  async update(req: Request, res: Response) {
+    const item = await store.update(String(req.params.id), req.body);
     if (!item) throw new ApiError(404, "Karyawan tidak ditemukan");
     res.json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Karyawan tidak ditemukan");
     res.status(204).send();
   },

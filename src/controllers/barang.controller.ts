@@ -83,9 +83,9 @@ function normalizeStokLokasi(rawStokLokasi: unknown): BarangStokLokasi[] {
 }
 
 export const barangController = {
-  list(req: Request, res: Response) {
+  async list(req: Request, res: Response) {
     const { search, kategori } = req.query;
-    let items = store.findAll();
+    let items = await store.findAll();
 
     if (typeof search === "string" && search.trim()) {
       const q = search.trim().toLowerCase();
@@ -99,13 +99,13 @@ export const barangController = {
     res.json(paginate(items, page, limit));
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Barang tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const {
       kode,
       nama,
@@ -130,7 +130,7 @@ export const barangController = {
     const normalizedStokLokasi = normalizeStokLokasi(stokLokasi);
     const totalStok = normalizedStokLokasi.reduce((sum, s) => sum + s.jumlah, 0);
 
-    const item = store.create({
+    const item = await store.create({
       kode,
       nama,
       kategori,
@@ -153,14 +153,14 @@ export const barangController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
-    const item = store.update(String(req.params.id), req.body);
+  async update(req: Request, res: Response) {
+    const item = await store.update(String(req.params.id), req.body);
     if (!item) throw new ApiError(404, "Barang tidak ditemukan");
     res.json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Barang tidak ditemukan");
     res.status(204).send();
   },
@@ -170,36 +170,40 @@ export const barangController = {
     sendXlsx(res, buffer, "template-barang.xlsx");
   },
 
-  exportXlsx(_req: Request, res: Response) {
-    const rows = store.findAll().map((b) => [
-      b.kode,
-      b.nama,
-      b.kategori,
-      b.jenis ?? "",
-      b.grup ?? "",
-      b.brand ?? "",
-      b.model ?? "",
-      supplierStore.findById(b.supplierId ?? "")?.nama ?? "",
-      b.satuan,
-      b.hargaBeli,
-      b.hargaJual,
-      b.stok,
-      b.deskripsi ?? "",
-      b.tampilBooking ? "Ya" : "Tidak",
-      b.aktif ? "Ya" : "Tidak",
-    ]);
+  async exportXlsx(_req: Request, res: Response) {
+    const all = await store.findAll();
+    const rows = await Promise.all(
+      all.map(async (b) => [
+        b.kode,
+        b.nama,
+        b.kategori,
+        b.jenis ?? "",
+        b.grup ?? "",
+        b.brand ?? "",
+        b.model ?? "",
+        (await supplierStore.findById(b.supplierId ?? ""))?.nama ?? "",
+        b.satuan,
+        b.hargaBeli,
+        b.hargaJual,
+        b.stok,
+        b.deskripsi ?? "",
+        b.tampilBooking ? "Ya" : "Tidak",
+        b.aktif ? "Ya" : "Tidak",
+      ])
+    );
     const buffer = buildExportWorkbook("Items", TEMPLATE_HEADERS, rows);
     sendXlsx(res, buffer, "data-barang.xlsx");
   },
 
-  importXlsx(req: Request, res: Response) {
+  async importXlsx(req: Request, res: Response) {
     if (!req.file) throw new ApiError(400, "File tidak ditemukan");
 
     const rows = parseSheetRows(req.file.buffer, "Items");
-    const existingKode = new Set(store.findAll().map((b) => b.kode.toLowerCase()));
+    const existingKode = new Set((await store.findAll()).map((b) => b.kode.toLowerCase()));
+    const allSupplier = await supplierStore.findAll();
     const summary: ImportSummary = { created: 0, failed: 0, errors: [] };
 
-    rows.forEach((row, index) => {
+    for (const [index, row] of rows.entries()) {
       const rowNumber = index + 3; // header + instruction row precede data
       try {
         const kode = row["Kode"];
@@ -217,13 +221,13 @@ export const barangController = {
           throw new Error(`Unit harus salah satu dari: ${SATUAN_OPTIONS.join(", ")}`);
         }
 
-        const kategoriNama = ensureLookup("kategori", kategori);
-        const jenisNama = row["Jenis"] ? ensureLookup("jenis", row["Jenis"]) : undefined;
-        const grupNama = row["Grup"] ? ensureLookup("grup", row["Grup"]) : undefined;
-        const brandNama = row["Brand"] ? ensureLookup("brand", row["Brand"]) : undefined;
-        const modelNama = row["Model"] ? ensureLookup("model", row["Model"]) : undefined;
+        const kategoriNama = await ensureLookup("kategori", kategori);
+        const jenisNama = row["Jenis"] ? await ensureLookup("jenis", row["Jenis"]) : undefined;
+        const grupNama = row["Grup"] ? await ensureLookup("grup", row["Grup"]) : undefined;
+        const brandNama = row["Brand"] ? await ensureLookup("brand", row["Brand"]) : undefined;
+        const modelNama = row["Model"] ? await ensureLookup("model", row["Model"]) : undefined;
         const supplier = row["Supplier"]
-          ? supplierStore.findAll().find((s) => s.nama.toLowerCase() === row["Supplier"].toLowerCase())
+          ? allSupplier.find((s) => s.nama.toLowerCase() === row["Supplier"].toLowerCase())
           : undefined;
         if (row["Supplier"] && !supplier) {
           throw new Error(`Supplier "${row["Supplier"]}" tidak ditemukan`);
@@ -238,7 +242,7 @@ export const barangController = {
         const stokLokasi: BarangStokLokasi[] =
           stokAwal > 0 ? [{ satuan, lokasi: "Toko", jumlah: stokAwal }] : [];
 
-        store.create({
+        await store.create({
           kode,
           nama,
           kategori: kategoriNama,
@@ -264,7 +268,7 @@ export const barangController = {
         summary.failed += 1;
         summary.errors.push({ row: rowNumber, message: err instanceof Error ? err.message : "Baris tidak valid" });
       }
-    });
+    }
 
     res.json(summary);
   },

@@ -6,20 +6,20 @@ import { ApiError } from "../middlewares/errorHandler";
 const store = new SqliteStore<PeriodeGaji>("periode_gaji");
 
 export const periodeGajiController = {
-  list(_req: Request, res: Response) {
-    const items = [...store.findAll()].sort(
+  async list(_req: Request, res: Response) {
+    const items = (await store.findAll()).sort(
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
     res.json(items);
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Periode gaji tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { nama, catatan, tanggalMulai, tanggalSelesai, tipe, rows } = req.body;
 
     if (!nama || !tanggalMulai || !tanggalSelesai || !Array.isArray(rows) || rows.length === 0) {
@@ -41,7 +41,7 @@ export const periodeGajiController = {
     const totalKomisi = normalizedRows.reduce((sum, r) => sum + r.komisi, 0);
     const totalPotongan = normalizedRows.reduce((sum, r) => sum + r.potongan, 0);
 
-    const item = store.create({
+    const item = await store.create({
       nama,
       catatan: catatan || undefined,
       tanggalMulai,
@@ -57,8 +57,8 @@ export const periodeGajiController = {
     res.status(201).json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Periode gaji tidak ditemukan");
     res.status(204).send();
   },

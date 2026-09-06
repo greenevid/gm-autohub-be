@@ -7,36 +7,40 @@ import { computeStatusPembayaran, invoiceNetTotal, invoiceStore } from "./invoic
 const store = new SqliteStore<Pembayaran>("pembayaran");
 
 export const pembayaranController = {
-  list(_req: Request, res: Response) {
-    res.json(store.findAll());
+  async list(_req: Request, res: Response) {
+    res.json(await store.findAll());
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { invoiceId, tanggal, jumlah, metode } = req.body;
     if (!invoiceId || !jumlah) throw new ApiError(400, "invoiceId dan jumlah wajib diisi");
+    const jumlahNum = Number(jumlah);
 
-    const invoice = invoiceStore.findById(invoiceId);
-    if (!invoice) throw new ApiError(400, `Invoice dengan id ${invoiceId} tidak ditemukan`);
+    const invoiceExists = await invoiceStore.findById(invoiceId);
+    if (!invoiceExists) throw new ApiError(400, `Invoice dengan id ${invoiceId} tidak ditemukan`);
 
-    const item = store.create({
+    const item = await store.create({
       invoiceId,
       tanggal: tanggal || new Date().toISOString(),
-      jumlah: Number(jumlah),
+      jumlah: jumlahNum,
       metode,
       createdAt: new Date().toISOString(),
     });
 
-    const dibayarBaru = invoice.dibayar + Number(jumlah);
-    invoiceStore.update(invoice.id, {
-      dibayar: dibayarBaru,
-      statusPembayaran: computeStatusPembayaran(invoiceNetTotal(invoice), dibayarBaru),
+    // Row-locked so two concurrent payments on the same invoice can't clobber each other's dibayar update.
+    await invoiceStore.updateWithLock(invoiceId, (current) => {
+      const dibayarBaru = current.dibayar + jumlahNum;
+      return {
+        dibayar: dibayarBaru,
+        statusPembayaran: computeStatusPembayaran(invoiceNetTotal(current), dibayarBaru),
+      };
     });
 
     res.status(201).json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Pembayaran tidak ditemukan");
     res.status(204).send();
   },

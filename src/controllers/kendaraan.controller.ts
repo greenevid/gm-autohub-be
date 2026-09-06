@@ -6,22 +6,22 @@ import { ApiError } from "../middlewares/errorHandler";
 const store = new SqliteStore<Kendaraan>("kendaraan");
 
 export const kendaraanController = {
-  list(_req: Request, res: Response) {
-    res.json(store.findAll());
+  async list(_req: Request, res: Response) {
+    res.json(await store.findAll());
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Kendaraan tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { pelangganId, tipe, platNomor, merk, model, tahun, warna } = req.body;
     if (!pelangganId || !tipe || !platNomor || !merk || !model || !tahun) {
       throw new ApiError(400, "pelangganId, tipe, platNomor, merk, model, dan tahun wajib diisi");
     }
-    const item = store.create({
+    const item = await store.create({
       pelangganId,
       tipe,
       platNomor,
@@ -34,14 +34,14 @@ export const kendaraanController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
-    const item = store.update(String(req.params.id), req.body);
+  async update(req: Request, res: Response) {
+    const item = await store.update(String(req.params.id), req.body);
     if (!item) throw new ApiError(404, "Kendaraan tidak ditemukan");
     res.json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Kendaraan tidak ditemukan");
     res.status(204).send();
   },

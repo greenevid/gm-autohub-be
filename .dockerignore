@@ -1,0 +1,8 @@
+node_modules
+dist
+data
+imports
+*.xlsx
+invoice.pdf
+.env
+.git

@@ -25,9 +25,9 @@ function normalizeItems(items: unknown): PaketItem[] {
 }
 
 export const paketController = {
-  list(req: Request, res: Response) {
+  async list(req: Request, res: Response) {
     const { search } = req.query;
-    let items = store.findAll();
+    let items = await store.findAll();
 
     if (typeof search === "string" && search.trim()) {
       const q = search.trim().toLowerCase();
@@ -38,17 +38,17 @@ export const paketController = {
     res.json(paginate(items, page, limit));
   },
 
-  get(req: Request, res: Response) {
-    const item = store.findById(String(req.params.id));
+  async get(req: Request, res: Response) {
+    const item = await store.findById(String(req.params.id));
     if (!item) throw new ApiError(404, "Paket tidak ditemukan");
     res.json(item);
   },
 
-  create(req: Request, res: Response) {
+  async create(req: Request, res: Response) {
     const { kode, nama, deskripsi, items, aktif, tampilBooking } = req.body;
     if (!nama) throw new ApiError(400, "nama wajib diisi");
 
-    const item = store.create({
+    const item = await store.create({
       kode: kode || `PKT-${randomUUID().slice(0, 8).toUpperCase()}`,
       nama,
       deskripsi,
@@ -60,9 +60,9 @@ export const paketController = {
     res.status(201).json(item);
   },
 
-  update(req: Request, res: Response) {
+  async update(req: Request, res: Response) {
     const { items, ...rest } = req.body;
-    const item = store.update(String(req.params.id), {
+    const item = await store.update(String(req.params.id), {
       ...rest,
       ...(items !== undefined ? { items: normalizeItems(items) } : {}),
     });
@@ -70,8 +70,8 @@ export const paketController = {
     res.json(item);
   },
 
-  remove(req: Request, res: Response) {
-    const deleted = store.delete(String(req.params.id));
+  async remove(req: Request, res: Response) {
+    const deleted = await store.delete(String(req.params.id));
     if (!deleted) throw new ApiError(404, "Paket tidak ditemukan");
     res.status(204).send();
   },

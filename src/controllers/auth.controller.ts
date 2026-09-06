@@ -31,11 +31,12 @@ function toPublicUser(user: User): PublicUser {
 }
 
 export const authController = {
-  login(req: Request, res: Response) {
+  async login(req: Request, res: Response) {
     const { email, password } = req.body;
     if (!email || !password) throw new ApiError(400, "email dan password wajib diisi");
 
-    const user = userStore.findAll().find((u) => u.email.toLowerCase() === String(email).toLowerCase());
+    const allUsers = await userStore.findAll();
+    const user = allUsers.find((u) => u.email.toLowerCase() === String(email).toLowerCase());
     if (!user || !verifyPassword(password, user.passwordHash)) {
       throw new ApiError(401, "Email atau password salah");
     }
@@ -53,12 +54,12 @@ export const authController = {
     res.status(204).send();
   },
 
-  me(req: Request, res: Response) {
+  async me(req: Request, res: Response) {
     const auth = req.headers.authorization;
     const token = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
     const session = resolveSession(token);
     if (!session) throw new ApiError(401, "Belum login");
-    const user = userStore.findById(session.userId);
+    const user = await userStore.findById(session.userId);
     if (!user) throw new ApiError(401, "Belum login");
     res.json(toPublicUser(user));
   },

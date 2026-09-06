@@ -1,9 +1,13 @@
-import { DatabaseSync } from "node:sqlite";
-import fs from "fs";
-import path from "path";
+import mysql from "mysql2/promise";
 import { env } from "./config/env";
 
-fs.mkdirSync(path.dirname(env.dbPath), { recursive: true });
-
-export const db = new DatabaseSync(env.dbPath);
-db.exec("PRAGMA journal_mode = WAL");
+export const pool = mysql.createPool({
+  host: env.mysql.host,
+  port: env.mysql.port,
+  user: env.mysql.user,
+  password: env.mysql.password,
+  database: env.mysql.database,
+  waitForConnections: true,
+  connectionLimit: 10,
+  namedPlaceholders: false,
+});
