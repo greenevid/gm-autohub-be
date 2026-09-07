@@ -3,6 +3,11 @@ import { Response } from "express";
 
 const INSTRUCTION_MARKER = "[";
 
+export function hasSheet(buffer: Buffer, sheetName: string): boolean {
+  const workbook = XLSX.read(buffer, { type: "buffer" });
+  return workbook.SheetNames.includes(sheetName);
+}
+
 export function parseSheetRows(buffer: Buffer, sheetName?: string): Record<string, string>[] {
   const workbook = XLSX.read(buffer, { type: "buffer" });
   const name = sheetName && workbook.SheetNames.includes(sheetName) ? sheetName : workbook.SheetNames[0];
@@ -52,6 +57,7 @@ export interface ImportRowError {
 
 export interface ImportSummary {
   created: number;
+  updated?: number;
   failed: number;
   errors: ImportRowError[];
 }

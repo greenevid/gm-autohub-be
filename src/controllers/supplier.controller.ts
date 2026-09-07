@@ -23,6 +23,30 @@ async function generateKode(nama: string): Promise<string> {
   return `${base}-${suffix}`;
 }
 
+/**
+ * Finds a supplier by name (case-insensitive) or auto-creates a bare-minimum
+ * record with just the name — used by imports where only "nama" is known.
+ * The other fields required by the create endpoint are left blank; they can
+ * be filled in later from the Supplier menu.
+ */
+export async function ensureSupplier(nama: string): Promise<Supplier> {
+  const trimmed = nama.trim();
+  const all = await store.findAll();
+  const existing = all.find((s) => s.nama.toLowerCase() === trimmed.toLowerCase());
+  if (existing) return existing;
+  return store.create({
+    kode: await generateKode(trimmed),
+    nama: trimmed,
+    tipe: "",
+    telepon: "",
+    email: "",
+    kota: "",
+    alamat: "",
+    status: "aktif",
+    createdAt: new Date().toISOString(),
+  });
+}
+
 export const supplierController = {
   async list(req: Request, res: Response) {
     const { search, status } = req.query;
@@ -74,21 +98,21 @@ export const supplierController = {
       status,
     } = req.body;
 
-    if (!nama || !tipe || !telepon || !email || !kota || !alamat) {
-      throw new ApiError(400, "nama, tipe, telepon, email, kota, dan alamat wajib diisi");
+    if (!nama) {
+      throw new ApiError(400, "nama wajib diisi");
     }
 
     const item = await store.create({
       kode: await generateKode(nama),
       nama,
-      tipe,
-      telepon,
-      email,
+      tipe: tipe || "",
+      telepon: telepon || "",
+      email: email || "",
       npwp: npwp || undefined,
       nik: nik || undefined,
-      kota,
+      kota: kota || "",
       syaratPembayaran: syaratPembayaran || undefined,
-      alamat,
+      alamat: alamat || "",
       alamatPengiriman: alamatPengiriman || undefined,
       alamatPenagihan: alamatPenagihan || undefined,
       namaPIC: namaPIC || undefined,

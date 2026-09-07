@@ -3,9 +3,10 @@ import { Barang, BarangStokLokasi, BarangUnit, Satuan, SATUAN_OPTIONS } from "..
 import { SqliteStore } from "../utils/sqliteStore";
 import { ApiError } from "../middlewares/errorHandler";
 import { paginate, parsePagination } from "../utils/pagination";
-import { buildExportWorkbook, buildTemplateWorkbook, ImportSummary, parseSheetRows, sendXlsx } from "../utils/excel";
+import { buildExportWorkbook, buildTemplateWorkbook, hasSheet, ImportSummary, parseSheetRows, sendXlsx } from "../utils/excel";
 import { ensureLookup } from "../utils/ensureLookup";
-import { supplierStore } from "./supplier.controller";
+import { ensureSupplier, supplierStore } from "./supplier.controller";
+import { importJasaRows } from "./jasa.controller";
 
 const TEMPLATE_HEADERS = [
   "Kode",
@@ -25,14 +26,14 @@ const TEMPLATE_HEADERS = [
   "Aktif (Ya/Tidak)",
 ];
 const TEMPLATE_INSTRUCTIONS = [
+  "[WAJIB] bila kode sudah ada, data barang akan diperbarui (replace)",
   "[WAJIB]",
   "[WAJIB]",
-  "[WAJIB]",
   "[Opsional]",
   "[Opsional]",
   "[Opsional]",
   "[Opsional]",
-  "[Opsional] nama supplier yang sudah terdaftar",
+  "[Opsional] nama supplier; dibuat otomatis di menu Supplier bila belum terdaftar",
   "[WAJIB] salah satu: " + SATUAN_OPTIONS.join(", "),
   "[Opsional] angka",
   "[Opsional] angka",
@@ -199,9 +200,8 @@ export const barangController = {
     if (!req.file) throw new ApiError(400, "File tidak ditemukan");
 
     const rows = parseSheetRows(req.file.buffer, "Items");
-    const existingKode = new Set((await store.findAll()).map((b) => b.kode.toLowerCase()));
-    const allSupplier = await supplierStore.findAll();
-    const summary: ImportSummary = { created: 0, failed: 0, errors: [] };
+    const barangByKode = new Map((await store.findAll()).map((b) => [b.kode.toLowerCase(), b]));
+    const summary: ImportSummary = { created: 0, updated: 0, failed: 0, errors: [] };
 
     for (const [index, row] of rows.entries()) {
       const rowNumber = index + 3; // header + instruction row precede data
@@ -209,14 +209,12 @@ export const barangController = {
         const kode = row["Kode"];
         const nama = row["Nama"];
         const kategori = row["Kategori"];
-        const satuanRaw = row["Unit"].toUpperCase();
+        const satuanRaw = (row["Unit"] || "").toUpperCase();
 
         if (!kode || !nama || !kategori) {
           throw new Error("Kode, Nama, dan Kategori wajib diisi");
         }
-        if (existingKode.has(kode.toLowerCase())) {
-          throw new Error(`Kode "${kode}" sudah dipakai`);
-        }
+        const existing = barangByKode.get(kode.toLowerCase());
         if (!SATUAN_OPTIONS.includes(satuanRaw as Satuan)) {
           throw new Error(`Unit harus salah satu dari: ${SATUAN_OPTIONS.join(", ")}`);
         }
@@ -226,12 +224,7 @@ export const barangController = {
         const grupNama = row["Grup"] ? await ensureLookup("grup", row["Grup"]) : undefined;
         const brandNama = row["Brand"] ? await ensureLookup("brand", row["Brand"]) : undefined;
         const modelNama = row["Model"] ? await ensureLookup("model", row["Model"]) : undefined;
-        const supplier = row["Supplier"]
-          ? allSupplier.find((s) => s.nama.toLowerCase() === row["Supplier"].toLowerCase())
-          : undefined;
-        if (row["Supplier"] && !supplier) {
-          throw new Error(`Supplier "${row["Supplier"]}" tidak ditemukan`);
-        }
+        const supplier = row["Supplier"] ? await ensureSupplier(row["Supplier"]) : undefined;
 
         const hargaBeli = Number(row["Harga Beli"]) || 0;
         const hargaJual = Number(row["Harga Jual"]) || 0;
@@ -242,7 +235,7 @@ export const barangController = {
         const stokLokasi: BarangStokLokasi[] =
           stokAwal > 0 ? [{ satuan, lokasi: "Toko", jumlah: stokAwal }] : [];
 
-        await store.create({
+        const barangData = {
           kode,
           nama,
           kategori: kategoriNama,
@@ -258,16 +251,32 @@ export const barangController = {
           hargaJual,
           stok: stokAwal,
           stokLokasi,
-          tampilBooking: row["Tampil di Booking (Ya/Tidak)"].toLowerCase() === "ya",
-          aktif: row["Aktif (Ya/Tidak)"].toLowerCase() !== "tidak",
-          createdAt: new Date().toISOString(),
-        });
-        existingKode.add(kode.toLowerCase());
-        summary.created += 1;
+          tampilBooking: (row["Tampil di Booking (Ya/Tidak)"] || "").toLowerCase() === "ya",
+          aktif: (row["Aktif (Ya/Tidak)"] || "").toLowerCase() !== "tidak",
+        };
+
+        if (existing) {
+          const updated = (await store.update(existing.id, barangData))!;
+          barangByKode.set(kode.toLowerCase(), updated);
+          summary.updated = (summary.updated ?? 0) + 1;
+        } else {
+          const created = await store.create({ ...barangData, createdAt: new Date().toISOString() });
+          barangByKode.set(kode.toLowerCase(), created);
+          summary.created += 1;
+        }
       } catch (err) {
         summary.failed += 1;
         summary.errors.push({ row: rowNumber, message: err instanceof Error ? err.message : "Baris tidak valid" });
       }
+    }
+
+    if (hasSheet(req.file.buffer, "Services")) {
+      const jasaRows = parseSheetRows(req.file.buffer, "Services");
+      const jasaSummary = await importJasaRows(jasaRows);
+      summary.created += jasaSummary.created;
+      summary.updated = (summary.updated ?? 0) + (jasaSummary.updated ?? 0);
+      summary.failed += jasaSummary.failed;
+      summary.errors.push(...jasaSummary.errors.map((e) => ({ row: e.row, message: `[Jasa] ${e.message}` })));
     }
 
     res.json(summary);

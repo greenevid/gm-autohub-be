@@ -115,51 +115,60 @@ export const jasaController = {
 
   async importXlsx(req: Request, res: Response) {
     if (!req.file) throw new ApiError(400, "File tidak ditemukan");
-
     const rows = parseSheetRows(req.file.buffer, "Services");
-    const existingKode = new Set((await store.findAll()).map((j) => j.kode.toLowerCase()));
-    const summary: ImportSummary = { created: 0, failed: 0, errors: [] };
-
-    for (const [index, row] of rows.entries()) {
-      const rowNumber = index + 3;
-      try {
-        const kode = row["Kode"];
-        const nama = row["Nama"];
-        const kategori = row["Kategori"];
-        const jenis = row["Jenis"];
-
-        if (!kode || !nama || !kategori || !jenis) {
-          throw new Error("Kode, Nama, Kategori, dan Jenis wajib diisi");
-        }
-        if (existingKode.has(kode.toLowerCase())) {
-          throw new Error(`Kode "${kode}" sudah dipakai`);
-        }
-
-        const kategoriNama = await ensureLookup("kategori", kategori);
-        const jenisNama = await ensureLookup("jenis", jenis);
-        const modelNama = row["Model"] ? await ensureLookup("model", row["Model"]) : undefined;
-
-        await store.create({
-          kode,
-          nama,
-          kategori: kategoriNama,
-          jenis: jenisNama,
-          model: modelNama,
-          deskripsi: row["Deskripsi"] || undefined,
-          harga: Number(row["Harga Jual"]) || 0,
-          komisi: row["Komisi (%)"] ? Number(row["Komisi (%)"]) : 10,
-          tampilBooking: row["Tampil di Booking (Ya/Tidak)"].toLowerCase() === "ya",
-          aktif: row["Aktif (Ya/Tidak)"].toLowerCase() !== "tidak",
-          createdAt: new Date().toISOString(),
-        });
-        existingKode.add(kode.toLowerCase());
-        summary.created += 1;
-      } catch (err) {
-        summary.failed += 1;
-        summary.errors.push({ row: rowNumber, message: err instanceof Error ? err.message : "Baris tidak valid" });
-      }
-    }
-
-    res.json(summary);
+    res.json(await importJasaRows(rows));
   },
 };
+
+/** Row-processing logic for the "Services" sheet, shared with the combined Barang+Jasa import. */
+export async function importJasaRows(rows: Record<string, string>[]): Promise<ImportSummary> {
+  const jasaByKode = new Map((await store.findAll()).map((j) => [j.kode.toLowerCase(), j]));
+  const summary: ImportSummary = { created: 0, updated: 0, failed: 0, errors: [] };
+
+  for (const [index, row] of rows.entries()) {
+    const rowNumber = index + 3;
+    try {
+      const kode = row["Kode"];
+      const nama = row["Nama"];
+      const kategori = row["Kategori"];
+      const jenis = row["Jenis"];
+
+      if (!kode || !nama || !kategori || !jenis) {
+        throw new Error("Kode, Nama, Kategori, dan Jenis wajib diisi");
+      }
+      const existing = jasaByKode.get(kode.toLowerCase());
+
+      const kategoriNama = await ensureLookup("kategori", kategori);
+      const jenisNama = await ensureLookup("jenis", jenis);
+      const modelNama = row["Model"] ? await ensureLookup("model", row["Model"]) : undefined;
+
+      const jasaData = {
+        kode,
+        nama,
+        kategori: kategoriNama,
+        jenis: jenisNama,
+        model: modelNama,
+        deskripsi: row["Deskripsi"] || undefined,
+        harga: Number(row["Harga Jual"]) || 0,
+        komisi: row["Komisi (%)"] ? Number(row["Komisi (%)"]) : 10,
+        tampilBooking: (row["Tampil di Booking (Ya/Tidak)"] || "").toLowerCase() === "ya",
+        aktif: (row["Aktif (Ya/Tidak)"] || "").toLowerCase() !== "tidak",
+      };
+
+      if (existing) {
+        const updated = (await store.update(existing.id, jasaData))!;
+        jasaByKode.set(kode.toLowerCase(), updated);
+        summary.updated = (summary.updated ?? 0) + 1;
+      } else {
+        const created = await store.create({ ...jasaData, createdAt: new Date().toISOString() });
+        jasaByKode.set(kode.toLowerCase(), created);
+        summary.created += 1;
+      }
+    } catch (err) {
+      summary.failed += 1;
+      summary.errors.push({ row: rowNumber, message: err instanceof Error ? err.message : "Baris tidak valid" });
+    }
+  }
+
+  return summary;
+}
