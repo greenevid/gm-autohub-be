@@ -178,7 +178,9 @@ export interface InvoiceItem {
   satuan?: string;
   qty: number;
   hargaSatuan: number;
+  diskonTipe?: "persen" | "rupiah";
   diskonPersen: number;
+  diskonRp?: number;
   lokasi?: string;
 }
 
@@ -264,6 +266,20 @@ export interface Posisi {
   createdAt: string;
 }
 
+export type TipeLokasi = "toko" | "gudang" | "cabang";
+export type StatusLokasi = "aktif" | "nonaktif";
+
+export interface Lokasi {
+  id: string;
+  nama: string;
+  tipe: TipeLokasi;
+  alamat: string;
+  kota: string;
+  telepon: string;
+  status: StatusLokasi;
+  createdAt: string;
+}
+
 export type SatuanGaji = "per_bulan" | "per_minggu" | "per_hari" | "per_jam";
 export type StatusKaryawan = "aktif" | "nonaktif";
 
@@ -320,7 +336,9 @@ export interface PembelianItem {
   satuan?: string;
   qty: number;
   hargaSatuan: number;
+  diskonTipe?: "persen" | "rupiah";
   diskonPersen: number;
+  diskonRp?: number;
   lokasi?: string;
 }
 
@@ -339,6 +357,7 @@ export interface Pembelian {
   potonganPersen?: number;
   subtotal?: number;
   dpp?: number;
+  bebasPpn?: boolean;
   pajakPersen?: number;
   pajak?: number;
   biayaPengiriman?: number;

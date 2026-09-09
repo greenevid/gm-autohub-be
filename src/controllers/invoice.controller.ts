@@ -6,6 +6,7 @@ import { ApiError } from "../middlewares/errorHandler";
 import { barangStore } from "./barang.controller";
 import { jasaStore } from "./jasa.controller";
 import { pajakSettings } from "./pengaturan.controller";
+import { hitungTotalSetelahDiskon } from "../utils/diskon";
 
 export const invoiceStore = new SqliteStore<Invoice>("invoice");
 const store = invoiceStore;
@@ -23,7 +24,9 @@ async function resolveItems(rawItems: unknown): Promise<InvoiceItem[]> {
       tipe?: string;
       itemId?: string;
       qty?: number;
+      diskonTipe?: "persen" | "rupiah";
       diskonPersen?: number;
+      diskonRp?: number;
       hargaSatuan?: number;
       lokasi?: string;
       satuan?: string;
@@ -33,7 +36,9 @@ async function resolveItems(rawItems: unknown): Promise<InvoiceItem[]> {
     }
 
     const qty = Number(input.qty) || 1;
+    const diskonTipe: "persen" | "rupiah" = input.diskonTipe === "rupiah" ? "rupiah" : "persen";
     const diskonPersen = Number(input.diskonPersen) || 0;
+    const diskonRp = Number(input.diskonRp) || 0;
     const hargaOverride = Number(input.hargaSatuan) > 0 ? Number(input.hargaSatuan) : undefined;
     const lokasi = input.lokasi || undefined;
 
@@ -49,7 +54,9 @@ async function resolveItems(rawItems: unknown): Promise<InvoiceItem[]> {
         satuan: input.satuan || undefined,
         qty,
         hargaSatuan: hargaOverride ?? barang.hargaJual,
+        diskonTipe,
         diskonPersen,
+        diskonRp,
         lokasi,
       });
       continue;
@@ -64,7 +71,9 @@ async function resolveItems(rawItems: unknown): Promise<InvoiceItem[]> {
       kode: jasa.kode,
       qty,
       hargaSatuan: hargaOverride ?? jasa.harga,
+      diskonTipe,
       diskonPersen,
+      diskonRp,
     });
   }
   return result;
@@ -76,7 +85,11 @@ function roundToNearest(value: number, step: number) {
 }
 
 function computeTotals(items: InvoiceItem[], potonganPersen: number, pajak: PajakSetting) {
-  const subtotal = items.reduce((sum, item) => sum + item.qty * item.hargaSatuan * (1 - item.diskonPersen / 100), 0);
+  const subtotal = items.reduce(
+    (sum, item) =>
+      sum + hitungTotalSetelahDiskon(item.qty * item.hargaSatuan, item.diskonTipe, item.diskonPersen, item.diskonRp ?? 0),
+    0
+  );
   const dpp = subtotal * (1 - potonganPersen / 100);
   const pajakPersen = pajak.aktif ? pajak.persentase : 0;
   const pajakNominal = roundToNearest(dpp * (pajakPersen / 100), pajak.pembulatan);

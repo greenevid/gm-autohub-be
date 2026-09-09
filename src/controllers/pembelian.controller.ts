@@ -5,6 +5,7 @@ import { PajakSetting, Pembelian, PembelianItem, StatusPembayaran, StatusPembeli
 import { ApiError } from "../middlewares/errorHandler";
 import { barangStore } from "./barang.controller";
 import { pajakSettings } from "./pengaturan.controller";
+import { hitungTotalSetelahDiskon } from "../utils/diskon";
 
 export const pembelianStore = new SqliteStore<Pembelian>("pembelian");
 const store = pembelianStore;
@@ -21,7 +22,9 @@ async function resolveItems(rawItems: unknown): Promise<PembelianItem[]> {
     const input = raw as {
       itemId?: string;
       qty?: number;
+      diskonTipe?: "persen" | "rupiah";
       diskonPersen?: number;
+      diskonRp?: number;
       hargaSatuan?: number;
       lokasi?: string;
       satuan?: string;
@@ -29,7 +32,9 @@ async function resolveItems(rawItems: unknown): Promise<PembelianItem[]> {
     if (!input.itemId) throw new ApiError(400, "Setiap item harus memiliki itemId");
 
     const qty = Number(input.qty) || 1;
+    const diskonTipe: "persen" | "rupiah" = input.diskonTipe === "rupiah" ? "rupiah" : "persen";
     const diskonPersen = Number(input.diskonPersen) || 0;
+    const diskonRp = Number(input.diskonRp) || 0;
     const hargaOverride = Number(input.hargaSatuan) > 0 ? Number(input.hargaSatuan) : undefined;
     const lokasi = input.lokasi || undefined;
     const satuan = input.satuan || undefined;
@@ -44,7 +49,9 @@ async function resolveItems(rawItems: unknown): Promise<PembelianItem[]> {
       satuan,
       qty,
       hargaSatuan: hargaOverride ?? barang.hargaBeli,
+      diskonTipe,
       diskonPersen,
+      diskonRp,
       lokasi,
     });
   }
@@ -56,10 +63,14 @@ function roundToNearest(value: number, step: number) {
   return Math.round(value / step) * step;
 }
 
-function computeTotals(items: PembelianItem[], potonganPersen: number, pajak: PajakSetting) {
-  const subtotal = items.reduce((sum, item) => sum + item.qty * item.hargaSatuan * (1 - item.diskonPersen / 100), 0);
+function computeTotals(items: PembelianItem[], potonganPersen: number, pajak: PajakSetting, bebasPpn: boolean) {
+  const subtotal = items.reduce(
+    (sum, item) =>
+      sum + hitungTotalSetelahDiskon(item.qty * item.hargaSatuan, item.diskonTipe, item.diskonPersen, item.diskonRp ?? 0),
+    0
+  );
   const dpp = subtotal * (1 - potonganPersen / 100);
-  const pajakPersen = pajak.aktif ? pajak.persentase : 0;
+  const pajakPersen = !bebasPpn && pajak.aktif ? pajak.persentase : 0;
   const pajakNominal = roundToNearest(dpp * (pajakPersen / 100), pajak.pembulatan);
   return { subtotal, dpp, pajakPersen, pajak: pajakNominal };
 }
@@ -103,6 +114,7 @@ export const pembelianController = {
       biayaLainnya,
       metodePembayaran,
       catatanPembayaran,
+      bebasPpn,
     } = req.body;
     if (!supplierId) throw new ApiError(400, "supplierId wajib diisi");
 
@@ -110,7 +122,8 @@ export const pembelianController = {
     const potongan = Number(potonganPersen) || 0;
     const ongkir = Number(biayaPengiriman) || 0;
     const lainnya = Number(biayaLainnya) || 0;
-    const { subtotal, dpp, pajakPersen, pajak } = computeTotals(resolvedItems, potongan, await pajakSettings.get());
+    const isBebasPpn = Boolean(bebasPpn);
+    const { subtotal, dpp, pajakPersen, pajak } = computeTotals(resolvedItems, potongan, await pajakSettings.get(), isBebasPpn);
     const total = dpp + pajak + ongkir + lainnya;
     const paid = Number(dibayar) || 0;
 
@@ -140,6 +153,7 @@ export const pembelianController = {
       potonganPersen: potongan,
       subtotal,
       dpp,
+      bebasPpn: isBebasPpn,
       pajakPersen,
       pajak,
       biayaPengiriman: ongkir,
